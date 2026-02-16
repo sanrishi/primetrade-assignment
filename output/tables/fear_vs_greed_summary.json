@@ -1,0 +1,18 @@
+[
+  {
+    "sentiment_bucket":"Fear",
+    "win_rate":0.3288762288,
+    "avg_pnl":32.230878311,
+    "avg_trade_size_usd":6199.9628607005,
+    "avg_trades_per_day":792.7333333333,
+    "long_short_ratio":2.8921859045
+  },
+  {
+    "sentiment_bucket":"Greed",
+    "win_rate":0.384793263,
+    "avg_pnl":45.8451667777,
+    "avg_trade_size_usd":5872.0256768605,
+    "avg_trades_per_day":294.1205211726,
+    "long_short_ratio":1.9663726304
+  }
+]

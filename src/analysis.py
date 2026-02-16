@@ -37,6 +37,24 @@ class Analyzer:
             raise KeyError("Expected PnL column 'closedPnL' (or 'Closed PnL').")
 
         leverage_col = self._find_column(self.df, ["leverage", "Leverage"])
+        size_usd_col = self._find_column(
+            self.df,
+            [
+                "Size USD",
+                "size usd",
+                "size_usd",
+                "sizeusd",
+            ],
+        )
+        side_col = self._find_column(
+            self.df,
+            [
+                "Side",
+                "side",
+                "Direction",
+                "direction",
+            ],
+        )
         account_col = self._find_column(self.df, ["account", "Account", "user_id", "User ID"])
         if account_col is None:
             raise KeyError("Expected trader id column 'account' (or 'Account').")
@@ -49,6 +67,10 @@ class Analyzer:
         }
         if leverage_col is not None:
             cols["leverage"] = leverage_col
+        if size_usd_col is not None:
+            cols["size_usd"] = size_usd_col
+        if side_col is not None:
+            cols["side"] = side_col
         return cols
 
     def calculate_daily_metrics(self) -> pd.DataFrame:
@@ -77,6 +99,16 @@ class Analyzer:
             raise ValueError(f"Found {bad} invalid date values; cannot compute daily metrics.")
 
         df[cols["pnl"]] = pd.to_numeric(df[cols["pnl"]], errors="coerce")
+        if "size_usd" in cols:
+            df[cols["size_usd"]] = pd.to_numeric(df[cols["size_usd"]], errors="coerce")
+
+        if "side" in cols:
+            side = df[cols["side"]].astype(str).str.lower()
+            df["__is_long__"] = side.str.contains("buy|long", na=False).astype("int64")
+            df["__is_short__"] = side.str.contains("sell|short", na=False).astype("int64")
+        else:
+            df["__is_long__"] = 0
+            df["__is_short__"] = 0
 
         group_keys = [cols["date"], cols["classification"]]
 
@@ -94,17 +126,102 @@ class Analyzer:
                 win_rate=(cols["pnl"], _win_rate),
                 trade_count=(cols["pnl"], "size"),
                 avg_leverage=(cols.get("leverage", cols["pnl"]), "mean"),
+                avg_trade_size_usd=(cols.get("size_usd", cols["pnl"]), "mean"),
+                long_count=("__is_long__", "sum"),
+                short_count=("__is_short__", "sum"),
             )
             .reset_index()
         )
 
         if "leverage" not in cols:
             aggregated["avg_leverage"] = np.nan
+        if "size_usd" not in cols:
+            aggregated["avg_trade_size_usd"] = np.nan
+
+        denom = aggregated["short_count"].to_numpy(dtype="float64")
+        num = aggregated["long_count"].to_numpy(dtype="float64")
+        aggregated["long_short_ratio"] = np.divide(
+            num, denom, out=np.full_like(num, np.nan, dtype="float64"), where=denom != 0
+        )
+        total_dir = (aggregated["long_count"] + aggregated["short_count"]).to_numpy(dtype="float64")
+        aggregated["long_share"] = np.divide(
+            num,
+            total_dir,
+            out=np.full_like(num, np.nan, dtype="float64"),
+            where=total_dir != 0,
+        )
 
         aggregated = aggregated.rename(
             columns={cols["date"]: "date", cols["classification"]: "Classification"}
         )
         return aggregated
+
+    def segment_profitability(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Profitability segment:
+        - Consistent Winners: positive lifetime PnL
+        - Net Losers: non-positive lifetime PnL
+        """
+        if self.df.empty:
+            raise ValueError("Analyzer input DataFrame is empty.")
+
+        cols = self._resolve_columns()
+        df = self.df.copy()
+        df[cols["pnl"]] = pd.to_numeric(df[cols["pnl"]], errors="coerce")
+
+        trader_pnl = (
+            df.groupby(cols["account"], dropna=False)
+            .agg(total_pnl=(cols["pnl"], "sum"))
+            .reset_index()
+            .rename(columns={cols["account"]: "account"})
+        )
+
+        winners = trader_pnl[trader_pnl["total_pnl"] > 0].copy().reset_index(drop=True)
+        losers = trader_pnl[trader_pnl["total_pnl"] <= 0].copy().reset_index(drop=True)
+        return winners, losers
+
+    def segment_activity(
+        self, trades_per_day_threshold: float = 5.0
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Activity segment based on average trades per active day per account:
+        - High Frequency: avg_trades_per_day > trades_per_day_threshold
+        - Low Frequency: avg_trades_per_day <= trades_per_day_threshold
+        """
+        if self.df.empty:
+            raise ValueError("Analyzer input DataFrame is empty.")
+
+        cols = self._resolve_columns()
+        df = self.df.copy()
+
+        date_col = cols["date"]
+        if date_col == "__derived_date__":
+            time_col = self._find_column(df, ["time", "timestamp", "timestamp ist"])
+            df["__derived_date__"] = pd.to_datetime(df[time_col], errors="coerce").dt.normalize()
+            date_col = "__derived_date__"
+        else:
+            df[date_col] = pd.to_datetime(df[date_col], errors="coerce").dt.normalize()
+
+        per_day = (
+            df.groupby([cols["account"], date_col], dropna=False)
+            .size()
+            .reset_index(name="trades")
+        )
+
+        activity = (
+            per_day.groupby(cols["account"], dropna=False)
+            .agg(
+                avg_trades_per_day=("trades", "mean"),
+                total_trades=("trades", "sum"),
+                active_days=("trades", "size"),
+            )
+            .reset_index()
+            .rename(columns={cols["account"]: "account"})
+        )
+
+        high = activity[activity["avg_trades_per_day"] > trades_per_day_threshold].copy()
+        low = activity[activity["avg_trades_per_day"] <= trades_per_day_threshold].copy()
+        return high.reset_index(drop=True), low.reset_index(drop=True)
 
     def segment_traders(self) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
@@ -183,6 +300,106 @@ if __name__ == "__main__":
         except KeyError as exc:
             print(f"\nSkipping leverage segmentation: {exc}")
 
+        winners, losers = analyzer.segment_profitability()
+        print(f"\nConsistent Winners: {winners['account'].nunique()}")
+        print(f"Net Losers: {losers['account'].nunique()}")
+
+        high_freq, low_freq = analyzer.segment_activity(trades_per_day_threshold=5.0)
+        print(f"\nHigh Frequency traders (>5 trades/day): {high_freq['account'].nunique()}")
+        print(f"Low Frequency traders (<=5 trades/day): {low_freq['account'].nunique()}")
+
+        # Generate reproducible artifacts (HTML charts + CSV tables) for the submission.
+        try:
+            from pathlib import Path
+
+            import plotly.express as px
+
+            out_charts = Path("output/charts")
+            out_tables = Path("output/tables")
+            out_charts.mkdir(parents=True, exist_ok=True)
+            out_tables.mkdir(parents=True, exist_ok=True)
+
+            dm = daily_metrics.copy()
+            dm["sentiment_bucket"] = "Other"
+            dm.loc[
+                dm["Classification"].astype(str).str.contains("fear", case=False, na=False),
+                "sentiment_bucket",
+            ] = "Fear"
+            dm.loc[
+                dm["Classification"].astype(str).str.contains("greed", case=False, na=False),
+                "sentiment_bucket",
+            ] = "Greed"
+
+            fg = (
+                dm[dm["sentiment_bucket"].isin(["Fear", "Greed"])]
+                .groupby("sentiment_bucket", as_index=False)
+                .agg(
+                    win_rate=("win_rate", "mean"),
+                    avg_pnl=("avg_pnl", "mean"),
+                    avg_trade_size_usd=("avg_trade_size_usd", "mean"),
+                    avg_trades_per_day=("trade_count", "mean"),
+                    long_short_ratio=("long_short_ratio", "mean"),
+                )
+                .sort_values("sentiment_bucket")
+            )
+            fg.to_csv(out_tables / "fear_vs_greed_summary.csv", index=False)
+            (out_tables / "fear_vs_greed_summary.json").write_text(
+                fg.to_json(orient="records", indent=2),
+                encoding="utf-8",
+            )
+
+            px.bar(fg, x="sentiment_bucket", y="win_rate", title="Win Rate: Fear vs Greed").write_html(
+                out_charts / "win_rate_fear_vs_greed.html"
+            )
+            px.bar(fg, x="sentiment_bucket", y="avg_pnl", title="Avg PnL: Fear vs Greed").write_html(
+                out_charts / "avg_pnl_fear_vs_greed.html"
+            )
+            px.bar(
+                fg,
+                x="sentiment_bucket",
+                y="avg_trade_size_usd",
+                title="Average Trade Size (USD): Fear vs Greed",
+            ).write_html(out_charts / "avg_trade_size_fear_vs_greed.html")
+            px.bar(
+                fg,
+                x="sentiment_bucket",
+                y="long_short_ratio",
+                title="Long/Short Ratio: Fear vs Greed",
+            ).write_html(out_charts / "long_short_ratio_fear_vs_greed.html")
+
+            if "leverage" in merged_df.columns:
+                px.histogram(
+                    merged_df,
+                    x="leverage",
+                    title="Leverage Distribution",
+                ).write_html(out_charts / "leverage_distribution.html")
+
+            seg_counts = pd.DataFrame(
+                {
+                    "segment": [
+                        "Consistent Winners",
+                        "Net Losers",
+                        "High Frequency (>5/day)",
+                        "Low Frequency (<=5/day)",
+                    ],
+                    "traders": [
+                        winners["account"].nunique(),
+                        losers["account"].nunique(),
+                        high_freq["account"].nunique(),
+                        low_freq["account"].nunique(),
+                    ],
+                }
+            )
+            seg_counts.to_csv(out_tables / "segment_counts.csv", index=False)
+            (out_tables / "segment_counts.json").write_text(
+                seg_counts.to_json(orient="records", indent=2),
+                encoding="utf-8",
+            )
+            px.bar(seg_counts, x="segment", y="traders", title="Trader Segments (counts)").write_html(
+                out_charts / "segment_counts.html"
+            )
+        except Exception as exc:
+            print(f"\nSkipping output generation: {exc}")
+
     except Exception as exc:
         raise SystemExit(f"Error: {exc}") from exc
-

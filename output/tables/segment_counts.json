@@ -1,0 +1,18 @@
+[
+  {
+    "segment":"Consistent Winners",
+    "traders":29
+  },
+  {
+    "segment":"Net Losers",
+    "traders":3
+  },
+  {
+    "segment":"High Frequency (>5\/day)",
+    "traders":32
+  },
+  {
+    "segment":"Low Frequency (<=5\/day)",
+    "traders":0
+  }
+]
