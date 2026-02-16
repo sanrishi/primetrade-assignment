@@ -338,9 +338,23 @@ if __name__ == "__main__":
                     avg_pnl=("avg_pnl", "mean"),
                     avg_trade_size_usd=("avg_trade_size_usd", "mean"),
                     avg_trades_per_day=("trade_count", "mean"),
-                    long_short_ratio=("long_short_ratio", "mean"),
+                    long_count=("long_count", "sum"),
+                    short_count=("short_count", "sum"),
+                    long_share=("long_share", "mean"),
                 )
                 .sort_values("sentiment_bucket")
+            )
+            fg["long_short_ratio_total"] = np.divide(
+                fg["long_count"].to_numpy(dtype="float64"),
+                fg["short_count"].to_numpy(dtype="float64"),
+                out=np.full(len(fg), np.nan, dtype="float64"),
+                where=fg["short_count"].to_numpy(dtype="float64") != 0,
+            )
+            fg["long_share_total"] = np.divide(
+                fg["long_count"].to_numpy(dtype="float64"),
+                (fg["long_count"] + fg["short_count"]).to_numpy(dtype="float64"),
+                out=np.full(len(fg), np.nan, dtype="float64"),
+                where=(fg["long_count"] + fg["short_count"]).to_numpy(dtype="float64") != 0,
             )
             fg.to_csv(out_tables / "fear_vs_greed_summary.csv", index=False)
             (out_tables / "fear_vs_greed_summary.json").write_text(
@@ -363,7 +377,7 @@ if __name__ == "__main__":
             px.bar(
                 fg,
                 x="sentiment_bucket",
-                y="long_short_ratio",
+                y="long_short_ratio_total",
                 title="Long/Short Ratio: Fear vs Greed",
             ).write_html(out_charts / "long_short_ratio_fear_vs_greed.html")
 

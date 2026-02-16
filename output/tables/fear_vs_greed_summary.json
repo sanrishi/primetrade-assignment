@@ -5,7 +5,11 @@
     "avg_pnl":32.230878311,
     "avg_trade_size_usd":6199.9628607005,
     "avg_trades_per_day":792.7333333333,
-    "long_short_ratio":2.8921859045
+    "long_count":41205,
+    "short_count":42032,
+    "long_share":0.5099007759,
+    "long_short_ratio_total":0.9803245147,
+    "long_share_total":0.4950322573
   },
   {
     "sentiment_bucket":"Greed",
@@ -13,6 +17,10 @@
     "avg_pnl":45.8451667777,
     "avg_trade_size_usd":5872.0256768605,
     "avg_trades_per_day":294.1205211726,
-    "long_short_ratio":1.9663726304
+    "long_count":42516,
+    "short_count":47779,
+    "long_share":0.4798589453,
+    "long_short_ratio_total":0.8898470039,
+    "long_share_total":0.4708566366
   }
 ]
