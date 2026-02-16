@@ -1,0 +1,10 @@
+[
+  {
+    "segment":"High Frequency (>5\/day)",
+    "traders":32
+  },
+  {
+    "segment":"Low Frequency (<=5\/day)",
+    "traders":0
+  }
+]
